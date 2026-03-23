@@ -3,6 +3,41 @@ Duas alteracoes necessarias para o banco rodar internamente:
   2. Tirar do Cloudflare Workers e subir num servidor interno
 
 ================================================================================
+  ESTRUTURA ATUAL DO PROJETO
+================================================================================
+
+  Arquivos na raiz (nao mais dentro de safra-ia-worker/).
+
+  BACKEND (API):
+    functions/api/chat.ts          Chat principal - recebe pergunta + planilha
+    functions/api/suggestions.ts   Gera 4 sugestoes de perguntas ao carregar planilha
+
+  FRONTEND (Interface):
+    src/app/page.tsx               Pagina principal - orquestra tudo
+    src/app/globals.css             Estilos globais
+    src/app/layout.tsx              Layout base (fontes, meta tags)
+    src/components/widgets/Chat.tsx      Area do chat com mensagens
+    src/components/widgets/Sidebar.tsx   Sidebar com upload, previa e sugestoes
+    src/components/widgets/UploadZone.tsx Componente de upload de planilha
+    src/lib/format.ts               Formatacao de markdown nas respostas
+    src/types/index.ts              Tipos TypeScript
+
+  CONFIG:
+    wrangler.toml                  Config do Cloudflare Workers/Pages
+    package.json                   Dependencias e scripts
+    next.config.ts                 Config do Next.js
+    tsconfig.json                  Config do TypeScript
+
+  FUNCIONALIDADES DO FRONTEND:
+    - Upload de planilha (CSV, XLSX, XLS) via drag-and-drop ou clique
+    - Sugestoes de perguntas aparecem na SIDEBAR, abaixo da previa da planilha
+    - Chat com IA que analisa os dados da planilha
+    - Botao de cancelar (vermelho) + tecla ESC para abortar requisicao em andamento
+    - Textos de status enquanto a IA processa ("Analisando sua pergunta...",
+      "Consultando os dados da planilha...", etc.)
+    - Providers de IA rodam em PARALELO (Promise.any) - retorna o primeiro que responder
+
+================================================================================
   ALTERACAO 1: TROCAR PROVIDERS DE IA PELO COPILOT STUDIO
 ================================================================================
 
@@ -10,7 +45,8 @@ Arquivos a alterar:
   - functions/api/chat.ts        (chat principal)
   - functions/api/suggestions.ts (sugestoes automaticas de perguntas)
     OBS: Ao carregar uma planilha, a IA gera 4 perguntas sugeridas baseadas
-    no contexto dos dados. Elas aparecem como botoes clicaveis no chat.
+    no contexto dos dados. Elas aparecem como botoes clicaveis na SIDEBAR
+    (abaixo da previa da planilha, nao no chat).
     Com modelos gratuitos, o contexto pode exceder o limite e falhar silenciosamente
     (nesse caso, as sugestoes simplesmente nao aparecem). Com um modelo mais
     robusto (ex: GPT-4o via Azure OpenAI), isso nao sera problema.
@@ -31,9 +67,10 @@ REMOVER INTEIRO: funcao tryWorkersAI() (linhas 10-34)
 REMOVER INTEIRO: interface HttpProvider + funcao getHttpProviders() (linhas 36-121)
 
 No handler (linha 123 em diante), MANTER o trecho que monta o systemPrompt
-(linhas 129-151) e SUBSTITUIR toda a logica de providers (linhas 153-217) por:
+(linhas 129-151) e SUBSTITUIR toda a logica de providers/Promise.any
+(linhas 153-214) por:
 
-  // Chamada ao Copilot Studio -> sugestão
+  // Chamada ao Copilot Studio
   try {
     const res = await fetch(context.env.COPILOT_STUDIO_ENDPOINT, {
       method: "POST",
@@ -60,9 +97,15 @@ No handler (linha 123 em diante), MANTER o trecho que monta o systemPrompt
 
 --- functions/api/suggestions.ts ---
 
-Mesma coisa: remover providers (linhas 1-94), manter o prompt de sugestoes,
-e substituir a logica de chamada (linhas 124-164) pelo mesmo fetch ao
-Copilot Studio, passando o prompt de sugestoes em vez do chat.
+Mesma coisa: remover providers (linhas 1-94) e funcao parseSuggestions (linhas 96-107),
+manter o prompt de sugestoes (linhas 118-122), e substituir a logica de
+Promise.any (linhas 124-182) pelo mesmo fetch ao Copilot Studio,
+passando o prompt de sugestoes em vez do chat.
+
+MANTER a funcao parseSuggestions ou extrair o JSON da resposta manualmente:
+
+  const match = raw.match(/\[[\s\S]*\]/);
+  const suggestions = match ? JSON.parse(match[0]).slice(0, 4) : [];
 
 
 --- .env.local e .dev.vars ---

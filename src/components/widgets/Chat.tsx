@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
 import type { ChatMessage } from "@/types";
 import { formatMarkdown } from "@/lib/format";
 
@@ -8,20 +8,45 @@ interface Props {
   messages: ChatMessage[];
   isLoading: boolean;
   hasSpreadsheet: boolean;
-  suggestions: string[];
-  loadingSuggestions: boolean;
   onSend: (text: string) => void;
+  onCancel: () => void;
 }
 
-export default function Chat({ messages, isLoading, hasSpreadsheet, suggestions, loadingSuggestions, onSend }: Props) {
+const thinkingSteps = [
+  "Analisando sua pergunta...",
+  "Consultando os dados da planilha...",
+  "Cruzando informações...",
+  "Processando resultados...",
+  "Montando a resposta...",
+];
+
+export default function Chat({ messages, isLoading, hasSpreadsheet, onSend, onCancel }: Props) {
   const messagesRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [thinkingIndex, setThinkingIndex] = useState(0);
 
   useEffect(() => {
     if (messagesRef.current) {
       messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
     }
   }, [messages, isLoading]);
+
+  useEffect(() => {
+    if (!isLoading) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [isLoading, onCancel]);
+
+  useEffect(() => {
+    if (!isLoading) { setThinkingIndex(0); return; }
+    const interval = setInterval(() => {
+      setThinkingIndex((i) => (i + 1) % thinkingSteps.length);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [isLoading]);
 
   function handleSend() {
     const text = textareaRef.current?.value.trim();
@@ -57,25 +82,6 @@ export default function Chat({ messages, isLoading, hasSpreadsheet, suggestions,
                 />
               </div>
             ))}
-            {!isLoading && (loadingSuggestions || suggestions.length > 0) && (
-              <div className="suggestions">
-                {loadingSuggestions ? (
-                  <>
-                    {[1, 2, 3, 4].map((i) => (
-                      <div key={i} className="skeleton-btn">
-                        <div className="skeleton-line" style={{ width: `${60 + i * 8}%` }} />
-                      </div>
-                    ))}
-                  </>
-                ) : (
-                  suggestions.map((s, i) => (
-                    <button key={i} className="suggestion-btn" onClick={() => onSend(s)}>
-                      {s}
-                    </button>
-                  ))
-                )}
-              </div>
-            )}
             {isLoading && (
               <div className="message ai">
                 <div className="message-role">Safra IA</div>
@@ -86,6 +92,7 @@ export default function Chat({ messages, isLoading, hasSpreadsheet, suggestions,
                     <span />
                   </div>
                 </div>
+                <div className="thinking-status">{thinkingSteps[thinkingIndex]}</div>
               </div>
             )}
           </>
@@ -114,11 +121,19 @@ export default function Chat({ messages, isLoading, hasSpreadsheet, suggestions,
                 }}
               />
             </div>
-            <button className="send-btn" disabled={isLoading} onClick={handleSend}>
-              <i className="ri-send-plane-fill" />
-            </button>
+            {isLoading ? (
+              <button className="send-btn cancel" onClick={onCancel} title="Cancelar (Esc)">
+                <i className="ri-stop-fill" />
+              </button>
+            ) : (
+              <button className="send-btn" onClick={handleSend}>
+                <i className="ri-send-plane-fill" />
+              </button>
+            )}
           </div>
-          <div className="input-hint">Enter para enviar · Shift+Enter para nova linha</div>
+          <div className="input-hint">
+            {isLoading ? "Esc para cancelar" : "Enter para enviar · Shift+Enter para nova linha"}
+          </div>
         </div>
       )}
     </div>

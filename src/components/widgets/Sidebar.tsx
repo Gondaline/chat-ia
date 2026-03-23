@@ -6,10 +6,13 @@ import UploadZone from "./UploadZone";
 interface Props {
   className?: string;
   spreadsheet: SpreadsheetData | null;
+  suggestions: string[];
+  loadingSuggestions: boolean;
   onFileLoaded: (data: SpreadsheetData) => void;
+  onSuggestionClick: (text: string) => void;
 }
 
-export default function Sidebar({ className, spreadsheet, onFileLoaded }: Props) {
+export default function Sidebar({ className, spreadsheet, suggestions, loadingSuggestions, onFileLoaded, onSuggestionClick }: Props) {
   return (
     <aside className={`sidebar ${className || ""}`.trim()}>
       <div className="sidebar-label">Planilha</div>
@@ -52,6 +55,26 @@ export default function Sidebar({ className, spreadsheet, onFileLoaded }: Props)
               </table>
             </div>
           </div>
+          {(loadingSuggestions || suggestions.length > 0) && (
+            <div className="sidebar-suggestions">
+              <div className="sidebar-label">Sugestões</div>
+              {loadingSuggestions ? (
+                <>
+                  {[1, 2, 3, 4].map((i) => (
+                    <div key={i} className="skeleton-btn">
+                      <div className="skeleton-line" style={{ width: `${60 + i * 8}%` }} />
+                    </div>
+                  ))}
+                </>
+              ) : (
+                suggestions.map((s, i) => (
+                  <button key={i} className="suggestion-btn" onClick={() => onSuggestionClick(s)}>
+                    {s}
+                  </button>
+                ))
+              )}
+            </div>
+          )}
         </>
       )}
     </aside>

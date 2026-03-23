@@ -575,6 +575,19 @@ body {
   40% { opacity: 1; transform: scale(1); }
 }
 
+/* ─── Thinking status ─── */
+.thinking-status {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  padding: 4px 4px 0;
+  animation: fadeSwitch 3s ease infinite;
+}
+
+@keyframes fadeSwitch {
+  0%, 100% { opacity: 0.4; }
+  15%, 85% { opacity: 1; }
+}
+
 /* ─── Input bar ─── */
 .input-bar {
   padding: 16px 28px 20px;
@@ -640,6 +653,14 @@ body {
 
 .send-btn:hover {
   background: var(--accent-hover);
+}
+
+.send-btn.cancel {
+  background: var(--danger);
+}
+
+.send-btn.cancel:hover {
+  background: #cc1236;
 }
 
 .send-btn:disabled {

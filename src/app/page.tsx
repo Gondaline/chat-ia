@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import type { ChatMessage, SpreadsheetData } from "@/types";
 import Header from "@/components/layouts/Header";
 import Sidebar from "@/components/widgets/Sidebar";
@@ -14,6 +14,15 @@ export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const handleCancel = useCallback(() => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    setIsLoading(false);
+  }, []);
 
   const toggleSidebar = useCallback(() => setSidebarOpen((v) => !v), []);
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
@@ -49,6 +58,9 @@ export default function Home() {
     setMessages((prev) => [...prev, userMsg]);
     setIsLoading(true);
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
@@ -57,6 +69,7 @@ export default function Home() {
           spreadsheetText: spreadsheet.text,
           messages: [...messages, userMsg].slice(-10),
         }),
+        signal: controller.signal,
       });
 
       const data = await res.json();
@@ -67,10 +80,15 @@ export default function Home() {
         { role: "assistant", content: data.reply || "Desculpe, não consegui processar." },
       ]);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Erro desconhecido";
-      setMessages((prev) => [...prev, { role: "assistant", content: `Erro: ${msg}` }]);
+      if (err instanceof DOMException && err.name === "AbortError") {
+        // Cancelled by user — no error message needed
+      } else {
+        const msg = err instanceof Error ? err.message : "Erro desconhecido";
+        setMessages((prev) => [...prev, { role: "assistant", content: `Erro: ${msg}` }]);
+      }
     }
 
+    abortRef.current = null;
     setIsLoading(false);
   }, [spreadsheet, messages, isLoading]);
 
@@ -108,15 +126,17 @@ export default function Home() {
         <Sidebar
           className={sidebarOpen ? "open" : ""}
           spreadsheet={spreadsheet}
+          suggestions={suggestions}
+          loadingSuggestions={loadingSuggestions}
           onFileLoaded={(data) => { handleFileLoaded(data); closeSidebar(); }}
+          onSuggestionClick={handleSend}
         />
         <Chat
           messages={messages}
           isLoading={isLoading}
           hasSpreadsheet={!!spreadsheet}
-          suggestions={suggestions}
-          loadingSuggestions={loadingSuggestions}
           onSend={handleSend}
+          onCancel={handleCancel}
         />
       </main>
     </>

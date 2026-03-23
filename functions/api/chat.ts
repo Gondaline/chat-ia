@@ -150,13 +150,6 @@ Regras:
     ...messages,
   ];
 
-  // 1) Try Cloudflare Workers AI first (free, no key needed)
-  if (context.env.AI) {
-    const reply = await tryWorkersAI(context.env.AI, fullMessages);
-    if (reply) return Response.json({ reply });
-  }
-
-  // 2) Try external HTTP providers
   const providers = getHttpProviders(context.env);
 
   if (!context.env.AI && providers.length === 0) {
@@ -166,52 +159,56 @@ Regras:
     );
   }
 
-  const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  let lastError = "Workers AI indisponível";
+  // Race all providers in parallel — first valid response wins
+  const candidates: Promise<string>[] = [];
 
+  // Workers AI candidates
+  if (context.env.AI) {
+    const models = [
+      "@cf/meta/llama-3.1-8b-instruct",
+      "@cf/meta/llama-3-8b-instruct",
+    ];
+    for (const model of models) {
+      candidates.push(
+        context.env.AI.run(model, { messages: fullMessages, max_tokens: 2048, temperature: 0.3 })
+          .then((r: any) => {
+            if (r?.response) return r.response;
+            throw new Error("empty");
+          })
+      );
+    }
+  }
+
+  // HTTP provider candidates
   for (const provider of providers) {
     for (const model of provider.models) {
-      for (let attempt = 0; attempt < 2; attempt++) {
-        if (attempt > 0) await delay(1500);
-
-        try {
+      candidates.push(
+        (async () => {
           const url = provider.url
             .replace("{model}", model)
             .replace("{key}", provider.apiKey);
-
           const res = await fetch(url, {
             method: "POST",
             headers: provider.buildHeaders(provider.apiKey),
             body: JSON.stringify(provider.buildBody(model, fullMessages)),
           });
-
+          if (!res.ok) throw new Error(`${provider.name}: ${res.statusText}`);
           const data = await res.json();
-
-          if (res.status === 429) {
-            lastError = `${provider.name}: Rate limit`;
-            continue;
-          }
-
-          if (!res.ok) {
-            lastError = `${provider.name}: ${provider.extractError(data, res.statusText)}`;
-            break;
-          }
-
           const reply = provider.extractReply(data);
-          if (reply) return Response.json({ reply });
-
-          lastError = `${provider.name}: Resposta vazia`;
-          break;
-        } catch (e: any) {
-          lastError = `${provider.name}: ${e.message || "Erro de conexão"}`;
-          break;
-        }
-      }
+          if (reply) return reply;
+          throw new Error(`${provider.name}: empty`);
+        })()
+      );
     }
   }
 
-  return Response.json(
-    { error: `Nenhum modelo disponível. Último erro: ${lastError}` },
-    { status: 502 }
-  );
+  try {
+    const reply = await Promise.any(candidates);
+    return Response.json({ reply });
+  } catch {
+    return Response.json(
+      { error: "Nenhum modelo disponível. Todos os providers falharam." },
+      { status: 502 }
+    );
+  }
 };

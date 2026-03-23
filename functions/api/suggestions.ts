@@ -121,44 +121,62 @@ ${truncated}
 
 Responda APENAS com um JSON array de 4 strings, sem nenhum texto adicional. Exemplo: ["pergunta 1", "pergunta 2", "pergunta 3", "pergunta 4"]`;
 
-  // 1) Try Workers AI first
+  const providers = getProviders(context.env);
+  const candidates: Promise<string[]>[] = [];
+
+  // Workers AI candidates
   if (context.env.AI) {
-    const raw = await generateWithWorkersAI(context.env.AI, prompt);
-    if (raw) {
-      const suggestions = parseSuggestions(raw);
-      if (suggestions) return Response.json({ suggestions });
+    const models = [
+      "@cf/meta/llama-3.1-8b-instruct",
+      "@cf/meta/llama-3-8b-instruct",
+    ];
+    for (const model of models) {
+      candidates.push(
+        context.env.AI.run(model, {
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: 300,
+          temperature: 0.5,
+        }).then((r: any) => {
+          if (r?.response) {
+            const s = parseSuggestions(r.response);
+            if (s) return s;
+          }
+          throw new Error("empty");
+        })
+      );
     }
   }
 
-  // 2) Try external providers
-  const providers = getProviders(context.env);
-
+  // HTTP provider candidates
   for (const provider of providers) {
     for (const model of provider.models) {
-      try {
-        const url = provider.url
-          .replace("{model}", model)
-          .replace("{key}", provider.apiKey);
-
-        const res = await fetch(url, {
-          method: "POST",
-          headers: provider.headers,
-          body: JSON.stringify(provider.buildBody(model, prompt)),
-        });
-
-        if (!res.ok) continue;
-
-        const data = await res.json();
-        const raw = provider.extractText(data);
-        if (raw) {
-          const suggestions = parseSuggestions(raw);
-          if (suggestions) return Response.json({ suggestions });
-        }
-      } catch {
-        continue;
-      }
+      candidates.push(
+        (async () => {
+          const url = provider.url
+            .replace("{model}", model)
+            .replace("{key}", provider.apiKey);
+          const res = await fetch(url, {
+            method: "POST",
+            headers: provider.headers,
+            body: JSON.stringify(provider.buildBody(model, prompt)),
+          });
+          if (!res.ok) throw new Error("fail");
+          const data = await res.json();
+          const raw = provider.extractText(data);
+          if (raw) {
+            const s = parseSuggestions(raw);
+            if (s) return s;
+          }
+          throw new Error("empty");
+        })()
+      );
     }
   }
 
-  return Response.json({ suggestions: [] });
+  try {
+    const suggestions = await Promise.any(candidates);
+    return Response.json({ suggestions });
+  } catch {
+    return Response.json({ suggestions: [] });
+  }
 };

@@ -6,8 +6,6 @@ Duas alteracoes necessarias para o banco rodar internamente:
   ESTRUTURA ATUAL DO PROJETO
 ================================================================================
 
-  Arquivos na raiz (nao mais dentro de safra-ia-worker/).
-
   BACKEND (API):
     functions/api/chat.ts          Chat principal - recebe pergunta + planilha
     functions/api/suggestions.ts   Gera 4 sugestoes de perguntas ao carregar planilha
@@ -35,7 +33,7 @@ Duas alteracoes necessarias para o banco rodar internamente:
     - Botao de cancelar (vermelho) + tecla ESC para abortar requisicao em andamento
     - Textos de status enquanto a IA processa ("Analisando sua pergunta...",
       "Consultando os dados da planilha...", etc.)
-    - Providers de IA rodam em PARALELO (Promise.any) - retorna o primeiro que responder
+    - Providers de IA rodam em PARALELO (Promise.any) - retorna o primeiro que responder (vcs podem colocar todas IA's de vocês aqui, a que for mais rápida, retorna o cliente)
 
 ================================================================================
   ALTERACAO 1: TROCAR PROVIDERS DE IA PELO COPILOT STUDIO

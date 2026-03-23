@@ -1,0 +1,254 @@
+Duas alteracoes necessarias para o banco rodar internamente:
+  1. Trocar os providers de IA (OpenRouter, Gemini, etc.) pelo Copilot Studio
+  2. Tirar do Cloudflare Workers e subir num servidor interno
+
+================================================================================
+  ALTERACAO 1: TROCAR PROVIDERS DE IA PELO COPILOT STUDIO
+================================================================================
+
+Arquivos a alterar:
+  - functions/api/chat.ts        (chat principal)
+  - functions/api/suggestions.ts (sugestoes automaticas de perguntas)
+    OBS: Ao carregar uma planilha, a IA gera 4 perguntas sugeridas baseadas
+    no contexto dos dados. Elas aparecem como botoes clicaveis no chat.
+    Com modelos gratuitos, o contexto pode exceder o limite e falhar silenciosamente
+    (nesse caso, as sugestoes simplesmente nao aparecem). Com um modelo mais
+    robusto (ex: GPT-4o via Azure OpenAI), isso nao sera problema.
+  - .env.local / .dev.vars       (variaveis de ambiente)
+
+Ambos os arquivos tem a MESMA estrutura. As mudancas sao identicas.
+
+--- functions/api/chat.ts ---
+
+REMOVER a interface Env atual (linhas 1-6) e substituir por:
+
+  interface Env {
+    COPILOT_STUDIO_ENDPOINT: string;
+    COPILOT_STUDIO_API_KEY: string;
+  }
+
+REMOVER INTEIRO: funcao tryWorkersAI() (linhas 10-34)
+REMOVER INTEIRO: interface HttpProvider + funcao getHttpProviders() (linhas 36-121)
+
+No handler (linha 123 em diante), MANTER o trecho que monta o systemPrompt
+(linhas 129-151) e SUBSTITUIR toda a logica de providers (linhas 153-217) por:
+
+  // Chamada ao Copilot Studio -> sugestão
+  try {
+    const res = await fetch(context.env.COPILOT_STUDIO_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${context.env.COPILOT_STUDIO_API_KEY}`,
+      },
+      body: JSON.stringify({
+        type: "message",
+        text: fullMessages[fullMessages.length - 1].content,
+        channelData: { spreadsheetContext: truncated }
+      }),
+    });
+
+    const data = await res.json();
+    const reply = data.reply || data.text || data.activities?.[0]?.text;
+
+    if (reply) return Response.json({ reply });
+    return Response.json({ error: "Resposta vazia" }, { status: 502 });
+  } catch (e) {
+    return Response.json({ error: e.message }, { status: 500 });
+  }
+
+
+--- functions/api/suggestions.ts ---
+
+Mesma coisa: remover providers (linhas 1-94), manter o prompt de sugestoes,
+e substituir a logica de chamada (linhas 124-164) pelo mesmo fetch ao
+Copilot Studio, passando o prompt de sugestoes em vez do chat.
+
+
+--- .env.local e .dev.vars ---
+
+Substituir:
+  OPENROUTER_API_KEY=sk-or-v1-...
+  GEMINI_API_KEY=AIzaSy...
+  GROQ_API_KEY=
+
+Por:
+  COPILOT_STUDIO_ENDPOINT=<endpoint-fornecido-pelo-copilot-studio>
+  COPILOT_STUDIO_API_KEY=<chave-fornecida-pelo-copilot-studio>
+
+
+--- QUAL INTEGRACAO MICROSOFT USAR ---
+
+OPCAO A - Azure OpenAI Service (MAIS FACIL, mudanca minima):
+  O codigo atual ja usa formato OpenAI (messages, model, choices).
+  Basta trocar SO o provider OpenRouter por Azure OpenAI:
+    URL:    https://<recurso>.openai.azure.com/openai/deployments/<modelo>/chat/completions?api-version=2024-02-01
+    Header: api-key: <chave>  (em vez de Authorization: Bearer)
+    Model:  nome do deployment (ex: "gpt-4o")
+  O resto do codigo (buildBody, extractReply) funciona IGUAL.
+
+OPCAO B - Copilot Studio via Direct Line:
+  URL: https://directline.botframework.com/v3/directline/conversations
+  Header: Authorization: Bearer <token-do-direct-line>
+  Fluxo: criar conversa -> enviar mensagem -> receber resposta
+  Docs: https://learn.microsoft.com/en-us/azure/bot-service/rest-api/bot-framework-rest-direct-line-3-0-concepts
+
+OPCAO C - Endpoint REST do Copilot Studio:
+  Endpoint fornecido no portal ao publicar o bot.
+  Cada tenant tem URL diferente - consultar o time de TI.
+
+
+================================================================================
+  ALTERACAO 2: MIGRAR DO CLOUDFLARE PARA SERVIDOR INTERNO
+================================================================================
+
+A aplicacao tem 2 partes:
+  - Frontend: HTML/CSS/JS estatico (pasta "out/" gerada pelo Next.js)
+  - Backend: 2 endpoints de API (chat e suggestions)
+
+O frontend nao precisa de servidor especial - sao arquivos estaticos.
+So o backend precisa ser migrado.
+
+
+--- PASSO 1: Instalar dependencias ---
+
+  npm install express cors dotenv
+  npm uninstall wrangler
+
+
+--- PASSO 2: Criar server.js na raiz do projeto ---
+
+  const express = require('express');
+  const cors = require('cors');
+  const path = require('path');
+  require('dotenv').config();
+
+  const app = express();
+  app.use(cors());
+  app.use(express.json());
+  app.use(express.static(path.join(__dirname, 'out')));
+
+  // POST /api/chat (migrado de functions/api/chat.ts)
+  app.post('/api/chat', async (req, res) => {
+    const { spreadsheetText, messages } = req.body;
+
+    const truncated = spreadsheetText.length > 12000
+      ? spreadsheetText.slice(0, 12000) + '\n... (dados truncados)'
+      : spreadsheetText;
+
+    // Manter o mesmo systemPrompt que esta em chat.ts (linhas 133-145)
+    const systemPrompt = `Voce e um assistente especialista em analise de dados do Banco Safra...`;
+
+    const fullMessages = [
+      { role: "user", content: systemPrompt },
+      { role: "assistant", content: "Entendido. Pode perguntar." },
+      ...messages,
+    ];
+
+    try {
+      const response = await fetch(process.env.COPILOT_STUDIO_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.COPILOT_STUDIO_API_KEY}`,
+        },
+        body: JSON.stringify({
+          type: "message",
+          text: fullMessages[fullMessages.length - 1].content,
+          channelData: { spreadsheetContext: truncated }
+        }),
+      });
+      const data = await response.json();
+      const reply = data.reply || data.text || data.activities?.[0]?.text;
+      if (reply) return res.json({ reply });
+      res.status(502).json({ error: 'Resposta vazia' });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/suggestions (migrado de functions/api/suggestions.ts)
+  app.post('/api/suggestions', async (req, res) => {
+    const { spreadsheetText } = req.body;
+
+    const truncated = spreadsheetText.length > 8000
+      ? spreadsheetText.slice(0, 8000) + '\n... (dados truncados)'
+      : spreadsheetText;
+
+    // Manter o mesmo prompt que esta em suggestions.ts (linhas 118-122)
+    const prompt = `Analise esta planilha e gere exatamente 4 perguntas curtas...`;
+
+    try {
+      const response = await fetch(process.env.COPILOT_STUDIO_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.COPILOT_STUDIO_API_KEY}`,
+        },
+        body: JSON.stringify({
+          type: "message",
+          text: prompt + '\n\n' + truncated,
+        }),
+      });
+      const data = await response.json();
+      const raw = data.reply || data.text || data.activities?.[0]?.text || '';
+      const match = raw.match(/\[[\s\S]*\]/);
+      const suggestions = match ? JSON.parse(match[0]).slice(0, 4) : [];
+      res.json({ suggestions });
+    } catch {
+      res.json({ suggestions: [] });
+    }
+  });
+
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'out', 'index.html'));
+  });
+
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => console.log(`Rodando na porta ${PORT}`));
+
+
+--- PASSO 3: Atualizar package.json ---
+
+  Trocar os scripts por:
+    "build": "next build",
+    "start": "node server.js"
+
+  Remover "deploy" e a devDependency "wrangler".
+
+
+--- PASSO 4: Criar .env na raiz ---
+
+  PORT=3000
+  COPILOT_STUDIO_ENDPOINT=<endpoint>
+  COPILOT_STUDIO_API_KEY=<chave>
+
+
+--- PASSO 5: Deletar arquivos do Cloudflare ---
+
+  - wrangler.toml
+  - pasta .wrangler/ (se existir)
+  - pasta functions/ (ja foi migrada para server.js)
+
+
+--- PASSO 6: Build e rodar ---
+
+  npm run build    (gera pasta out/ com o frontend)
+  npm start        (sobe o servidor na porta 3000)
+
+
+================================================================================
+  RESUMO
+================================================================================
+
+  ARQUIVO                      | O QUE FAZER
+  -----------------------------|-------------------------------------------
+  functions/api/chat.ts        | Trocar providers pelo Copilot Studio
+  functions/api/suggestions.ts | Trocar providers pelo Copilot Studio
+  .env.local / .dev.vars       | Trocar por COPILOT_STUDIO_ENDPOINT e _API_KEY
+  wrangler.toml                | DELETAR
+  package.json                 | Tirar wrangler, por express, ajustar scripts
+  server.js (NOVO)             | Criar com Express (codigo acima)
+  src/app/layout.tsx           | So se rodar offline (fontes locais)
+
+  Todo o resto (src/components, src/lib, src/types, public/) fica como esta.
